@@ -1,0 +1,22 @@
+@load /opt/zeek/share/zeek/base/protocols/smb
+module DetectSMBExfil;
+
+export {
+    redef enum Notice::Type += { SMBFileAccess, SMBDownloadSensitive };
+}
+
+event SMB::file_open(c: connection, path: string, name: string, access: count, did_create: bool, did_read: bool, did_write: bool)
+    {
+      
+        NOTICE([$note=SMBFileAccess,
+                $msg=fmt("SMB file accessed: %s from %s", name, c$id$orig_h),
+                $conn=c]);
+        
+       
+        if ( /secret|password|\.exe/ in name )
+        {
+            NOTICE([$note=SMBDownloadSensitive,
+                    $msg=fmt("Sensitive SMB file download: %s from %s", name, c$id$orig_h),
+                    $conn=c]);
+        }
+    }

@@ -1,0 +1,74 @@
+@load base/frameworks/notice
+
+module DNS_TUNNELS;
+
+export {
+    redef enum Notice::Type += {
+        RequestCountOverload,
+        OvermuchNumber,
+        DnsTunnelsAttack
+    };
+
+    const request_count_threshold = 10 &redef;
+    const query_len_threshold = 15 &redef;
+    const percentage_of_num_count = 0.1 &redef;
+    const record_expiration = 1min &redef;
+}
+
+global cq_table: table[addr] of count &read_expire = record_expiration;
+
+event dns_request(c: connection, msg: dns_msg, query: string, qtype: count, qclass: count)
+{
+    if (query == "")
+        return;
+
+    local query_len = |query|;
+    local src_ip = c$id$orig_h;
+
+    if (src_ip in cq_table)
+    {
+        if (cq_table[src_ip] + 1 > request_count_threshold)
+        {
+            NOTICE([$note = RequestCountOverload,
+                    $conn = c,
+                    $msg = fmt("The host %s is overloaded with DNS queries", src_ip)]);
+            delete cq_table[src_ip];
+            return;
+        }
+        else
+        {
+            cq_table[src_ip] += 1;
+
+            if (query_len > query_len_threshold)
+            {
+                local num_string = "0123456789";
+                local num_count = 0;
+
+                for (i in query)
+                {
+                    if (i in num_string)
+                        num_count += 1;
+                }
+
+                if ((num_count * 1.0) / query_len > percentage_of_num_count)
+                {
+                    NOTICE([$note = DnsTunnelsAttack,
+                            $conn = c,
+                            $msg = fmt("Suspicious DNS tunnel detected from %s with query: %s", src_ip, query)]);
+                    return;
+                }
+                else
+                {
+                    NOTICE([$note = OvermuchNumber,
+                            $conn = c,
+                            $msg = fmt("Long DNS query from %s with query: %s", src_ip, query)]);
+                    return;
+                }
+            }
+        }
+    }
+    else
+    {
+        cq_table[src_ip] = 0;
+    }
+}

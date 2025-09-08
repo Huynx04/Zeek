@@ -1,0 +1,67 @@
+module HTTPBeaconAnomaly;
+
+export {
+    redef enum Notice::Type += { HTTP_Beaconing_Anomaly };
+}
+
+const MIN_REQUESTS = 6;        
+const MAX_VARIANCE = 5secs;    
+
+function abs(x: interval): interval
+    {
+    if ( x < 0secs )
+        return -x;
+    return x;
+    }
+
+global http_timestamps: table[addr, string] of table[count] of time;
+
+event http_request(c: connection, method: string, original_URI: string, unescaped_URI: string, version: string)
+{
+    local src = c$id$orig_h;
+    local dst = c$id$resp_h;
+    local host = "";
+    if ( c$http?$host )
+        host = c$http$host;
+    if ( host == "" ) host = fmt("%s", dst);
+
+    if ( [src, host] !in http_timestamps )
+        http_timestamps[src, host] = table();
+
+    local ts_table = http_timestamps[src, host];
+    local ts_count = |ts_table|;
+    ts_table[ts_count] = network_time();
+
+    if ( ts_count >= MIN_REQUESTS )
+        {
+        local deltas: table[count] of interval;
+        for ( i in ts_table )
+            {
+                if ( i + 1 in ts_table )
+                    deltas[i] = ts_table[i+1] - ts_table[i];
+            }
+
+        local total = 0secs;
+        for ( i in deltas ) total += deltas[i];
+        if ( |deltas| == 0 ) return;
+        local avg = total / |deltas|;
+        local beacon_like = T;
+        for ( i in deltas )
+            {
+            if ( abs(deltas[i] - avg) > MAX_VARIANCE )
+                {
+                beacon_like = F;
+                break;
+                }
+            }
+
+        if ( beacon_like )
+            {
+            NOTICE([$note=HTTP_Beaconing_Anomaly,
+                    $msg=fmt("HTTP beaconing detected from %s to %s (%d requests, interval ~%.1fs)",
+                             src, host, |ts_table|, avg),
+                    $src=src, $dst=dst]);
+            delete http_timestamps[src, host];
+            }
+        }
+}
